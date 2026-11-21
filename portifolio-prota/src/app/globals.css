@@ -50,9 +50,7 @@ body {
 .hero-zoom { animation: hero-zoom 9s ease-out forwards; }
 .hero-glow { animation: hero-glow 2.6s ease-in-out 2.6s infinite; }
 
-/* Pausa o autoplay com o mouse em cima ou com foco de teclado */
-.hero:hover .hero-fill,
-.hero:hover .hero-ring,
+/* O mouse em cima NÃO pausa o autoplay. Só o foco de teclado pausa (acessibilidade). */
 .hero:has(:focus-visible) .hero-fill,
 .hero:has(:focus-visible) .hero-ring {
   animation-play-state: paused;

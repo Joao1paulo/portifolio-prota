@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 type Slide = {
   image: string;
@@ -44,31 +44,172 @@ const EASE = "ease-[cubic-bezier(.22,1,.36,1)]";
 
 const GRAIN = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")`;
 
-function Words({
+// ---------------------------------------------------------------------------
+// Texto "sendo escrito": cada letra entra em sequência (sobe, desfoca → nítido)
+// com um cursor âmbar que salta de letra em letra, passa da linha de apoio para
+// a palavra destaque e, no fim, pisca duas vezes e some. O ritmo tem uma
+// variação sutil (JITTER) e uma micro-pausa nos espaços, para parecer digitado
+// por uma pessoa e não por uma máquina.
+// Usa a Web Animations API: recria tudo sempre que o slide entra (shown vira
+// true), então reinicia sozinho quando o carrossel volta ao slide.
+// ---------------------------------------------------------------------------
+const SUPPORT_START = 350; // ms: depois do início da transição do slide
+const SUPPORT_STEP = 36; // ms entre letras da linha de apoio
+const HIGHLIGHT_STEP = 52; // ms entre letras da palavra destaque (maior, mais marcada)
+const JITTER = [0, 14, 4, 22, 8, 18, 2, 12];
+const LETTER_EASE = "cubic-bezier(.22,1,.36,1)";
+
+const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
+const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// instante (ms) em que cada letra (sem contar espaços) é "digitada"
+function typeTimes(text: string, start: number, step: number) {
+  const times: number[] = [];
+  let t = start;
+  let n = 0;
+  Array.from(text).forEach((ch) => {
+    if (ch === " ") {
+      t += 80; // micro-pausa entre palavras
+      return;
+    }
+    times.push(t);
+    t += step + JITTER[n++ % JITTER.length];
+  });
+  return { times, end: t };
+}
+
+// linha do tempo de um slide: linha de apoio → palavra destaque → efeito da palavra
+function timeline(before: string, highlight: string) {
+  const s = typeTimes(before, SUPPORT_START, SUPPORT_STEP);
+  const hStart = s.end + 90;
+  const h = typeTimes(highlight, hStart, HIGHLIGHT_STEP);
+  return {
+    hStart,
+    supportHold: hStart - s.times[s.times.length - 1], // cursor segue até a próxima linha
+    sweep: h.end + 40, // preenchimento âmbar começa quando a palavra termina de ser escrita
+    corners: h.end + 260, // visor fecha o enquadramento
+  };
+}
+
+const timelines = slides.map((s) => timeline(s.before, s.highlight));
+
+function playTyping(
+  letters: (HTMLElement | null)[],
+  carets: (HTMLElement | null)[],
+  times: number[],
+  hold: number,
+  blink: boolean,
+) {
+  const anims: Animation[] = [];
+  times.forEach((delay, i) => {
+    const letter = letters[i];
+    const caret = carets[i];
+    if (!letter || !caret) return;
+
+    anims.push(
+      letter.animate(
+        [
+          { opacity: 0, transform: "translateY(.32em)", filter: "blur(6px)" },
+          { opacity: 1, transform: "translateY(0)", filter: "blur(0px)" },
+        ],
+        { duration: 480, delay, easing: LETTER_EASE, fill: "both" },
+      ),
+    );
+
+    const last = i === times.length - 1;
+    if (last && blink) {
+      // último cursor: pisca duas vezes e some
+      anims.push(
+        caret.animate(
+          [
+            { opacity: 1, offset: 0, easing: "step-end" },
+            { opacity: 0, offset: 0.28, easing: "step-end" },
+            { opacity: 1, offset: 0.46, easing: "step-end" },
+            { opacity: 0, offset: 0.72, easing: "step-end" },
+            { opacity: 0, offset: 1 },
+          ],
+          { duration: hold, delay, fill: "none" },
+        ),
+      );
+    } else {
+      // cursor fica na letra até a próxima ser escrita
+      const until = last ? delay + hold : times[i + 1];
+      anims.push(
+        caret.animate([{ opacity: 1 }, { opacity: 1 }], {
+          duration: Math.max(until - delay, 1),
+          delay,
+          fill: "none",
+        }),
+      );
+    }
+  });
+  return () => anims.forEach((a) => a.cancel());
+}
+
+function Typed({
   text,
   shown,
   start,
+  step,
+  hold,
+  blink = false,
+  className = "",
 }: {
   text: string;
   shown: boolean;
   start: number;
+  step: number;
+  hold: number;
+  blink?: boolean;
+  className?: string;
 }) {
-  return text.split(" ").map((word, i) => (
-    <span
-      key={i}
-      className="mr-[0.25em] inline-block overflow-hidden py-[0.08em] align-bottom"
-    >
-      <span
-        className={`inline-block transition-transform duration-700 ${EASE}`}
-        style={{
-          transform: shown ? "translateY(0)" : "translateY(110%)",
-          transitionDelay: shown ? `${start + i * 80}ms` : "0ms",
-        }}
-      >
-        {word}
+  const times = useMemo(() => typeTimes(text, start, step).times, [text, start, step]);
+  const letters = useRef<(HTMLSpanElement | null)[]>([]);
+  const carets = useRef<(HTMLSpanElement | null)[]>([]);
+
+  // layout effect: a animação começa antes do 1º frame, sem "piscar" o texto inteiro
+  useIsoLayoutEffect(() => {
+    if (!shown || reduced()) return;
+    return playTyping(letters.current, carets.current, times, hold, blink);
+  }, [shown, times, hold, blink]);
+
+  let idx = -1;
+  return (
+    <>
+      <span className="sr-only">{text}</span>
+      <span aria-hidden="true" className={className}>
+        {text.split(" ").map((word, wi, all) => (
+          <span
+            key={wi}
+            className={`inline-block whitespace-nowrap ${wi < all.length - 1 ? "mr-[0.28em]" : ""}`}
+          >
+            {Array.from(word).map((ch) => {
+              const i = ++idx;
+              return (
+                <span key={i} className="relative inline-block">
+                  <span
+                    ref={(el) => {
+                      letters.current[i] = el;
+                    }}
+                    className="inline-block"
+                    style={shown ? undefined : { opacity: 0 }}
+                  >
+                    {ch}
+                  </span>
+                  <span
+                    ref={(el) => {
+                      carets.current[i] = el;
+                    }}
+                    className="pointer-events-none absolute left-full top-[12%] ml-[0.05em] h-[76%] w-[0.07em] rounded-full bg-[#D78521] opacity-0"
+                  />
+                </span>
+              );
+            })}
+          </span>
+        ))}
       </span>
-    </span>
-  ));
+    </>
+  );
 }
 
 const corners = [
@@ -78,36 +219,52 @@ const corners = [
   "bottom-0 right-0 border-b-2 border-r-2",
 ];
 
-// Destaque em 3 tempos: a palavra sobe vazada (só contorno), é preenchida de
-// âmbar da esquerda p/ direita como uma barra de carregamento, e o "visor de
-// câmera" fecha o enquadramento em volta. Depois pulsa com brilho de neon.
-function Highlight({ text, shown }: { text: string; shown: boolean }) {
+// Palavra destaque (a mesma animação de "Audiovisual" nas três palavras): a palavra
+// é escrita vazada (só contorno), é preenchida de âmbar da esquerda p/ direita como
+// uma barra de carregamento, e o "visor de câmera" fecha o enquadramento em volta.
+// Depois pulsa com brilho de neon.
+function HighlightWord({
+  text,
+  shown,
+  start,
+  sweep,
+  cornersAt,
+}: {
+  text: string;
+  shown: boolean;
+  start: number;
+  sweep: number;
+  cornersAt: number;
+}) {
   return (
-    <span className="relative mt-3 block w-fit px-[0.22em] py-[0.06em] text-[1.15em]">
-      <span className="block overflow-hidden py-[0.12em]">
-        <span
-          className={`block transition-transform duration-700 ${EASE}`}
-          style={{
-            transform: shown ? "translateY(0)" : "translateY(115%)",
-            transitionDelay: shown ? "950ms" : "0ms",
-          }}
-        >
-          <span className={`relative inline-block whitespace-nowrap ${shown ? "hero-glow" : ""}`}>
-            {/* camada vazada */}
-            <span className="text-transparent [-webkit-text-stroke:2px_#fff]">
-              {text}
-            </span>
-            {/* camada de preenchimento âmbar revelada em varredura */}
-            <span
-              aria-hidden="true"
-              className="absolute inset-0 text-[#D78521] [-webkit-text-stroke:2px_#D78521] transition-[clip-path] duration-[900ms] ease-[cubic-bezier(.65,0,.35,1)]"
-              style={{
-                clipPath: shown ? "inset(0 0 0 0)" : "inset(0 100% 0 0)",
-                transitionDelay: shown ? "1500ms" : "0ms",
-              }}
-            >
-              {text}
-            </span>
+    <span className="relative mt-3 block w-fit px-[0.22em] py-[0.06em] text-[clamp(2.4rem,7vw,6.5rem)] font-extrabold">
+      <span className="block py-[0.12em]">
+        <span className={`relative inline-block whitespace-nowrap ${shown ? "hero-glow" : ""}`}>
+          {/* camada vazada, escrita letra a letra */}
+          <Typed
+            text={text}
+            shown={shown}
+            start={start}
+            step={HIGHLIGHT_STEP}
+            hold={900}
+            blink
+            className="text-transparent [-webkit-text-stroke:2px_#fff]"
+          />
+          {/* camada de preenchimento âmbar revelada em varredura (mesmas letras, alinhadas) */}
+          <span
+            aria-hidden="true"
+            className="absolute inset-0 text-[#D78521] [-webkit-text-stroke:2px_#D78521] transition-[clip-path] duration-[900ms] ease-[cubic-bezier(.65,0,.35,1)]"
+            style={{
+              // inset negativo em cima/embaixo: o recorte não corta pernas de letras (g, p)
+              clipPath: shown ? "inset(-.3em 0 -.3em 0)" : "inset(-.3em 100% -.3em 0)",
+              transitionDelay: shown ? `${sweep}ms` : "0ms",
+            }}
+          >
+            {Array.from(text).map((ch, i) => (
+              <span key={i} className="inline-block">
+                {ch}
+              </span>
+            ))}
           </span>
         </span>
       </span>
@@ -121,7 +278,7 @@ function Highlight({ text, shown }: { text: string; shown: boolean }) {
           style={{
             opacity: shown ? 1 : 0,
             transform: shown ? "scale(1)" : "scale(1.8)",
-            transitionDelay: shown ? "1700ms" : "0ms",
+            transitionDelay: shown ? `${cornersAt}ms` : "0ms",
           }}
         />
       ))}
@@ -200,6 +357,7 @@ export default function HeroCarousel() {
         const isPrev = i === prev;
         const shown = isActive || isPrev;
         const textShown = ready && shown;
+        const tl = timelines[i];
 
         return (
           <div
@@ -232,15 +390,29 @@ export default function HeroCarousel() {
             <div className="absolute inset-0 bg-linear-to-r from-[#00142B]/90 via-[#002147]/55 to-transparent" />
             <div className="absolute inset-0 bg-linear-to-t from-[#00142B]/85 via-transparent to-[#00142B]/35" />
 
-            {/* Texto */}
+            {/* Texto: setup pequeno (Poppins 500) → palavra destaque grande (Nura 800) */}
             <div
               className={`relative z-10 flex h-full items-center px-[5%] pb-24 pt-24 transition-opacity duration-500 ${
                 isActive ? "opacity-100" : "opacity-0"
               }`}
             >
-              <h2 className="max-w-4xl font-nura text-[clamp(2.25rem,6vw,5.5rem)] font-bold leading-[1.02] text-white drop-shadow-[0_4px_24px_rgba(0,20,43,.5)]">
-                <Words text={slide.before} shown={textShown} start={350} />
-                <Highlight text={slide.highlight} shown={textShown} />
+              <h2 className="max-w-4xl font-nura leading-[1.02] text-white drop-shadow-[0_4px_24px_rgba(0,20,43,.5)]">
+                <span className="block font-sans text-[clamp(1.1rem,2vw,1.75rem)] font-medium leading-[1.25]">
+                  <Typed
+                    text={slide.before}
+                    shown={textShown}
+                    start={SUPPORT_START}
+                    step={SUPPORT_STEP}
+                    hold={tl.supportHold}
+                  />
+                </span>
+                <HighlightWord
+                  text={slide.highlight}
+                  shown={textShown}
+                  start={tl.hStart}
+                  sweep={tl.sweep}
+                  cornersAt={tl.corners}
+                />
               </h2>
             </div>
           </div>
@@ -261,33 +433,27 @@ export default function HeroCarousel() {
       {/* Controles */}
       <div className="absolute inset-x-0 bottom-0 z-40 flex items-center justify-between px-[5%] pb-6 md:pb-8">
         {/* Sliders: a barra ativa alonga e se preenche; ao terminar, avança */}
-        <div className="flex items-center gap-4">
-          <span className="w-12 text-sm font-semibold tabular-nums text-white">
-            {String(current + 1).padStart(2, "0")}
-            <span className="text-white/50"> / {String(slides.length).padStart(2, "0")}</span>
-          </span>
-          <div className="flex items-center gap-2">
-            {slides.map((slide, i) => (
-              <button
-                key={slide.image}
-                type="button"
-                onClick={() => goTo(i)}
-                aria-label={`Ir para o slide ${i + 1}`}
-                aria-current={i === current}
-                className={`relative h-1.5 overflow-hidden rounded-full bg-white/25 transition-all duration-500 hover:bg-white/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#D78521] ${
-                  i === current ? "w-16" : "w-6"
-                }`}
-              >
-                {i === current && (
-                  <span
-                    key={current}
-                    onAnimationEnd={next}
-                    className="hero-fill absolute inset-0 origin-left rounded-full bg-[#D78521]"
-                  />
-                )}
-              </button>
-            ))}
-          </div>
+        <div className="flex items-center gap-2">
+          {slides.map((slide, i) => (
+            <button
+              key={slide.image}
+              type="button"
+              onClick={() => goTo(i)}
+              aria-label={`Ir para o slide ${i + 1}`}
+              aria-current={i === current}
+              className={`relative h-1.5 overflow-hidden rounded-full bg-white/25 transition-all duration-500 hover:bg-white/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#D78521] ${
+                i === current ? "w-16" : "w-6"
+              }`}
+            >
+              {i === current && (
+                <span
+                  key={current}
+                  onAnimationEnd={next}
+                  className="hero-fill absolute inset-0 origin-left rounded-full bg-[#D78521]"
+                />
+              )}
+            </button>
+          ))}
         </div>
 
         {/* Setas: a seta "próximo" tem um anel que mostra o tempo do slide */}
