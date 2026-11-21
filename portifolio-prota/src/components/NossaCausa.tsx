@@ -332,7 +332,7 @@ export default function NossaCausa() {
                 aria-hidden
                 className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/40 to-transparent transition-transform duration-700 group-hover:translate-x-full"
               />
-              <span className="relative">Conhecer nossas soluções</span>
+              <span className="relativ">Conhecer nossas soluções</span>
               <svg
                 aria-hidden
                 viewBox="0 0 24 24"

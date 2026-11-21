@@ -4,17 +4,20 @@ import Image from "next/image";
 import { useEffect, useState } from "react";
 
 const links = [
-  { label: "Quem somos?", href: "#quem-somos" },
+  { label: "Quem somos?", href: "#nossa-causa" },
   { label: "Soluções", href: "#solucoes" },
   { label: "Cases", href: "#cases" },
   { label: "Parcerias", href: "#parcerias" },
   { label: "Contato", href: "#contato" },
 ];
 
+// Altura reservada para a navbar fixa, para o título da seção não ficar escondido
+const SCROLL_OFFSET = 88;
+
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false);
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState("#quem-somos");
+  const [active, setActive] = useState("");
 
   // Compacta a barra ao rolar a página
   useEffect(() => {
@@ -40,6 +43,36 @@ export default function Navbar() {
     return () => observer.disconnect();
   }, []);
 
+  // Scroll suave até a seção (ou até o topo, quando href === "#")
+  const handleNavClick = (
+    e: React.MouseEvent<HTMLAnchorElement>,
+    href: string
+  ) => {
+    e.preventDefault();
+    setOpen(false);
+
+    const reduceMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches;
+    const behavior: ScrollBehavior = reduceMotion ? "auto" : "smooth";
+
+    if (href === "#") {
+      window.scrollTo({ top: 0, behavior });
+      history.replaceState(null, "", window.location.pathname);
+      setActive("");
+      return;
+    }
+
+    const target = document.querySelector(href);
+    if (!target) return;
+
+    const top =
+      target.getBoundingClientRect().top + window.scrollY - SCROLL_OFFSET;
+    window.scrollTo({ top, behavior });
+    history.replaceState(null, "", href);
+    setActive(href);
+  };
+
   return (
     <header className="fixed inset-x-0 top-0 z-50 px-4 pt-4">
       <nav
@@ -49,7 +82,12 @@ export default function Navbar() {
         }`}
       >
         {/* Logo dentro de círculo com gradiente */}
-        <a href="#" aria-label="Prota — início" className="group shrink-0">
+        <a
+          href="#"
+          onClick={(e) => handleNavClick(e, "#")}
+          aria-label="Prota — início"
+          className="group shrink-0"
+        >
           <span
             className={`relative grid place-items-center overflow-hidden rounded-full bg-linear-to-br from-[#0050AD] to-[#002147] shadow-md transition-all duration-500 group-hover:scale-105 group-hover:shadow-lg group-hover:shadow-[#0050AD]/50 ${
               scrolled ? "size-9" : "size-11"
@@ -76,6 +114,7 @@ export default function Navbar() {
               <li key={href}>
                 <a
                   href={href}
+                  onClick={(e) => handleNavClick(e, href)}
                   className={`group relative isolate block rounded-full px-4 py-2 font-nura text-[15px] uppercase tracking-wide transition-colors duration-300 ${
                     isActive
                       ? "text-[#002147]"
@@ -136,7 +175,7 @@ export default function Navbar() {
             <li key={href}>
               <a
                 href={href}
-                onClick={() => setOpen(false)}
+                onClick={(e) => handleNavClick(e, href)}
                 className={`block rounded-2xl px-4 py-3 font-nura uppercase tracking-wide transition hover:bg-[#0050AD]/10 hover:text-[#002147] ${
                   active === href ? "text-[#002147]" : "text-neutral-500"
                 }`}
@@ -145,7 +184,6 @@ export default function Navbar() {
               </a>
             </li>
           ))}
-
         </ul>
       </div>
     </header>
