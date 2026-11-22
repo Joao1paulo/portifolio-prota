@@ -8,7 +8,7 @@ import Image from "next/image";
 /*  ÁREA DE EDIÇÃO — troque textos, mídias e links só aqui em cima     */
 /* ================================================================== */
 
-const TITLE_SMALL = "Alguns dos"; // linha pequena, acima do título
+const TITLE_SMALL = "Alguns exemplos dos nossos serviços"; // linha pequena, acima do título
 const TITLE_MAIN = "Nossos "; // título principal, em negrito
 const TITLE_HIGHLIGHT = "Cases"; // palavra em itálico com sublinhado âmbar
 const BUTTON_LABEL = "Ver mais";
